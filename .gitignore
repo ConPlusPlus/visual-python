@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+Debugging_Testing/
+*.vpy.json~

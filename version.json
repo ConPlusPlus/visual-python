@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "notes": "First release!",
+  "assets": {
+    "windows": "https://raw.githubusercontent.com/ConPlusPlus/visual-python/main/visual_python.py",
+    "mac": "https://raw.githubusercontent.com/ConPlusPlus/visual-python/main/visual_python.py",
+    "chromebook": "https://raw.githubusercontent.com/ConPlusPlus/visual-python/main/visual_python.py"
+  }
+}
