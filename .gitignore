@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 Debugging_Testing/
 *.vpy.json~
+build/
+dist/
+*.spec
+_test_*.py

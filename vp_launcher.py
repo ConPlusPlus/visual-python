@@ -1,119 +1,106 @@
 """
-Visual Python - Installer / Launcher / Updater wizard
-=====================================================
+Visual Python - bootstrap launcher  (build this into VisualPython.exe)
+======================================================================
 
-This is the small program you give to your users. They run it once; it:
-  1. asks which computer they're on (Windows / Mac / Chromebook),
-  2. downloads the right app build from your GitHub repo,
-  3. installs it locally with a double-click launcher for their OS,
-  4. can re-check GitHub any time to pull updates you push out.
+This is the program you turn into a single executable with PyInstaller and
+hand to users. The .exe bundles Python, so users need NOTHING installed.
 
-It needs only Python's standard library (tkinter + urllib), so it runs the
-same on all three platforms.
+What it does every time it runs:
+  1. Makes sure the latest app code (visual_python.py) is on the machine,
+     seeding a bundled copy on first run so it works even offline.
+  2. Checks your GitHub version.json and, if a newer app version is published,
+     downloads it (tiny + instant - no rebuild, no reinstall).
+  3. Runs the app *inside this same bundled Python* (so updates are just the
+     small .py file changing - the .exe itself rarely needs rebuilding).
 
----------------------------------------------------------------------------
-HOW YOU (the developer) PUBLISH AND PUSH UPDATES
----------------------------------------------------------------------------
-1. Create a public GitHub repo, e.g. github.com/<you>/visual-python.
-2. Put `visual_python.py` in it.
-3. Add a `version.json` next to it (see make_template_manifest() below):
+Build it (on Windows, with Python installed):
+    pip install pyinstaller
+    python build_exe.py
+  -> produces dist/VisualPython.exe
 
-   {
-     "version": "1.0.0",
-     "notes": "First release!",
-     "assets": {
-       "windows":    "https://raw.githubusercontent.com/<you>/visual-python/main/visual_python.py",
-       "mac":        "https://raw.githubusercontent.com/<you>/visual-python/main/visual_python.py",
-       "chromebook": "https://raw.githubusercontent.com/<you>/visual-python/main/visual_python.py"
-     }
-   }
+To push an app update to everyone: edit visual_python.py, bump "version" in
+version.json, commit + push to GitHub. Every user gets it next launch.
 
-4. Fill in GITHUB_USER / GITHUB_REPO below and ship THIS file to users.
-5. To push an update: edit visual_python.py, bump "version" in version.json,
-   commit + push. Every user's "Check for updates" now sees the new version.
-   (Later you can point "windows" at a real .exe, "mac" at an .app, etc. -
-    the launcher just downloads whatever URL each OS points to.)
+Other platforms: build the same way ON that OS (PyInstaller makes a Mac .app
+on a Mac, a Linux binary on Linux). The app code is identical everywhere.
 
-SECURITY NOTE: the launcher downloads and runs code from the URLs in your
-version.json. Keep the repo under your control and use https only - anyone who
-can change those files can run code on every user's machine. Optionally add a
-"sha256" map to version.json and the launcher will verify each download.
+SECURITY: the launcher downloads + runs code from your GitHub repo, so keep it
+under your control and https-only. version.json may carry a "sha256" map which
+this launcher verifies before applying an update.
 """
 
 import os
 import sys
 import json
+import shutil
 import hashlib
 import platform
-import subprocess
 import urllib.request
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
+
+# Imported so PyInstaller bundles everything the app code needs at runtime
+# (the app is shipped as bundled data, so its imports aren't auto-detected).
+import io            # noqa: F401
+import contextlib    # noqa: F401
+import traceback     # noqa: F401
+import random        # noqa: F401
+from tkinter import ttk, simpledialog, filedialog  # noqa: F401
 
 # ===========================================================================
-# CONFIG - edit these two lines, then ship this file.
+# CONFIG
 # ===========================================================================
 GITHUB_USER = "ConPlusPlus"
 GITHUB_REPO = "visual-python"
 GITHUB_BRANCH = "main"
-
 MANIFEST_URL = (f"https://raw.githubusercontent.com/{GITHUB_USER}/"
                 f"{GITHUB_REPO}/{GITHUB_BRANCH}/version.json")
 APP_FILENAME = "visual_python.py"
-OS_KEYS = ["windows", "mac", "chromebook"]
-OS_LABELS = {"windows": "Windows", "mac": "Mac", "chromebook": "Chromebook"}
-
-COL_BG = "#1e1f26"
-COL_PANEL = "#2d2f3a"
-COL_TEXT = "#e6e6e6"
-COL_ACCENT = "#4ea1ff"
 
 
 # ===========================================================================
-# Pure logic (no GUI) - kept separate so it can be tested headlessly
+# Paths
 # ===========================================================================
-def detect_os():
-    """Best guess at the user's platform key."""
+def os_key():
+    s = platform.system()
+    return {"Windows": "windows", "Darwin": "mac"}.get(s, "chromebook")
+
+
+def app_dir():
+    """Per-user folder where the live app code + version marker live."""
+    home = Path.home()
     s = platform.system()
     if s == "Windows":
-        return "windows"
-    if s == "Darwin":
-        return "mac"
-    return "chromebook"     # Linux / ChromeOS Crostini
-
-
-def install_dir(os_key=None):
-    """Where the app gets installed for this user."""
-    home = Path.home()
-    os_key = os_key or detect_os()
-    if os_key == "windows":
         base = Path(os.environ.get("LOCALAPPDATA", home))
-    elif os_key == "mac":
+    elif s == "Darwin":
         base = home / "Library" / "Application Support"
     else:
         base = home / ".local" / "share"
-    base = base if base.exists() else home
-    return base / "VisualPython"
+    d = (base if base.exists() else home) / "VisualPython"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-def fetch_bytes(url, timeout=20):
-    """Download a URL and return its bytes. (Patched out in tests.)"""
-    req = urllib.request.Request(url, headers={"User-Agent": "VisualPython-Launcher"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+def bundled_seed_path():
+    """Where the app copy baked into the exe (or sitting next to this script)
+    can be found."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, APP_FILENAME)
 
 
-def get_manifest(fetch=fetch_bytes):
-    return json.loads(fetch(MANIFEST_URL).decode("utf-8"))
+def local_app_path(appdir=None):
+    return Path(appdir or app_dir()) / APP_FILENAME
 
 
-def choose_asset(manifest, os_key):
-    assets = manifest.get("assets", {})
-    return assets.get(os_key) or assets.get("all")
+def installed_path(appdir=None):
+    return Path(appdir or app_dir()) / "installed.json"
 
 
+# ===========================================================================
+# Version helpers
+# ===========================================================================
 def parse_version(text):
     parts = []
     for chunk in str(text).split("."):
@@ -126,241 +113,159 @@ def is_newer(remote, local):
     return parse_version(remote) > parse_version(local)
 
 
-def installed_info(dest):
-    f = Path(dest) / "installed.json"
-    if f.exists():
+def read_installed(appdir=None):
+    p = installed_path(appdir)
+    if p.exists():
         try:
-            return json.loads(f.read_text(encoding="utf-8"))
+            return json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             return {}
     return {}
 
 
-def launcher_script(os_key, dest):
-    """(filename, contents, make_executable) for the OS double-click launcher."""
-    app = Path(dest) / APP_FILENAME
-    if os_key == "windows":
-        return ("Launch Visual Python.bat",
-                f'@echo off\r\npython "{app}"\r\nif errorlevel 1 pause\r\n',
-                False)
-    if os_key == "mac":
-        return ("Launch Visual Python.command",
-                f'#!/bin/bash\ncd "$(dirname "$0")"\npython3 "{APP_FILENAME}"\n',
-                True)
-    return ("launch.sh",
-            f'#!/bin/bash\ncd "$(dirname "$0")"\npython3 "{APP_FILENAME}"\n',
-            True)
+def write_installed(version, appdir=None):
+    installed_path(appdir).write_text(
+        json.dumps({"version": version}, indent=2), encoding="utf-8")
 
 
-def install(os_key, dest=None, fetch=fetch_bytes):
-    """Download the app for os_key into dest. Returns the installed version."""
-    dest = Path(dest) if dest else install_dir(os_key)
-    manifest = get_manifest(fetch)
-    url = choose_asset(manifest, os_key)
-    if not url:
-        raise ValueError(f"version.json has no download for '{os_key}'.")
-    data = fetch(url)
-    expected = manifest.get("sha256", {}).get(os_key)
-    if expected:
-        actual = hashlib.sha256(data).hexdigest()
-        if actual.lower() != expected.lower():
-            raise ValueError("Download failed a security check (hash mismatch).")
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / APP_FILENAME).write_bytes(data)
-    fname, contents, make_exec = launcher_script(os_key, dest)
-    path = dest / fname
-    path.write_text(contents, encoding="utf-8")
-    if make_exec:
-        try:
-            os.chmod(path, 0o755)
-        except OSError:
-            pass
-    info = {"version": manifest.get("version", "0.0.0"), "os": os_key,
-            "notes": manifest.get("notes", "")}
-    (dest / "installed.json").write_text(json.dumps(info, indent=2),
-                                         encoding="utf-8")
-    return info["version"]
-
-
-def check_update(dest, fetch=fetch_bytes):
-    """Returns (has_update, remote_version, notes)."""
-    local = installed_info(dest).get("version", "0.0.0")
-    manifest = get_manifest(fetch)
-    remote = manifest.get("version", "0.0.0")
-    return is_newer(remote, local), remote, manifest.get("notes", "")
-
-
-def make_template_manifest():
-    raw = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{GITHUB_BRANCH}/{APP_FILENAME}"
-    return {
-        "version": "1.0.0",
-        "notes": "First release!",
-        "assets": {k: raw for k in OS_KEYS},
-    }
-
-
-# ===========================================================================
-# GUI wizard
-# ===========================================================================
-class Wizard(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Visual Python - Setup")
-        self.geometry("560x420")
-        self.configure(bg=COL_BG)
-        self.resizable(False, False)
-
-        self.os_key = tk.StringVar(value=detect_os())
-        self.dest = install_dir(self.os_key.get())
-
-        self.body = tk.Frame(self, bg=COL_BG)
-        self.body.pack(fill="both", expand=True, padx=24, pady=20)
-        self.show_welcome()
-
-    def _clear(self):
-        for w in self.body.winfo_children():
-            w.destroy()
-
-    def _title(self, text):
-        tk.Label(self.body, text=text, bg=COL_BG, fg=COL_TEXT,
-                 font=("Helvetica", 16, "bold")).pack(anchor="w")
-
-    def _btn(self, parent, text, cmd, primary=False):
-        return tk.Button(parent, text=text, command=cmd,
-                         bg=(COL_ACCENT if primary else COL_PANEL),
-                         fg=("#0b1020" if primary else COL_TEXT),
-                         activebackground="#6fb4ff", relief="flat",
-                         padx=18, pady=8, font=("Helvetica", 11, "bold"))
-
-    # ---- step 1: welcome + OS choice ----
-    def show_welcome(self):
-        self._clear()
-        self._title("Welcome to Visual Python")
-        tk.Label(self.body,
-                 text="Build Python programs by connecting blocks.\n"
-                      "First, which computer are you using?",
-                 bg=COL_BG, fg="#b9c0d4", font=("Helvetica", 11),
-                 justify="left").pack(anchor="w", pady=(8, 16))
-        for key in OS_KEYS:
-            tk.Radiobutton(self.body, text=OS_LABELS[key], value=key,
-                           variable=self.os_key, command=self._os_changed,
-                           bg=COL_BG, fg=COL_TEXT, selectcolor=COL_PANEL,
-                           activebackground=COL_BG, activeforeground="#fff",
-                           font=("Helvetica", 12)).pack(anchor="w", pady=2)
-        if detect_os() == self.os_key.get():
-            tk.Label(self.body, text=f"(detected: {OS_LABELS[detect_os()]})",
-                     bg=COL_BG, fg="#5b6075",
-                     font=("Helvetica", 9)).pack(anchor="w", pady=(6, 0))
-        nav = tk.Frame(self.body, bg=COL_BG)
-        nav.pack(side="bottom", fill="x", pady=(20, 0))
-        self._btn(nav, "Next  ›", self.show_install, primary=True).pack(side="right")
-
-    def _os_changed(self):
-        self.dest = install_dir(self.os_key.get())
-
-    # ---- step 2: review + install ----
-    def show_install(self):
-        self._clear()
-        self._title("Install")
-        os_key = self.os_key.get()
-        tk.Label(self.body,
-                 text=f"Computer:  {OS_LABELS[os_key]}\n"
-                      f"Install to:  {self.dest}",
-                 bg=COL_BG, fg="#b9c0d4", font=("Helvetica", 11),
-                 justify="left").pack(anchor="w", pady=(8, 6))
-
-        tips = {
-            "windows": "Needs Python from python.org (it includes Tkinter).",
-            "mac": "Needs Python from python.org (avoid the built-in one).",
-            "chromebook": "Turn on Linux (Crostini), then:\n"
-                          "    sudo apt install python3 python3-tk",
-        }
-        tk.Label(self.body, text="Before running the app:\n  " + tips[os_key],
-                 bg=COL_BG, fg="#8a90a6", font=("Helvetica", 10),
-                 justify="left").pack(anchor="w", pady=(0, 12))
-
-        self.status = tk.Label(self.body, text="", bg=COL_BG, fg=COL_ACCENT,
-                               font=("Helvetica", 10), justify="left",
-                               wraplength=500)
-        self.status.pack(anchor="w")
-
-        nav = tk.Frame(self.body, bg=COL_BG)
-        nav.pack(side="bottom", fill="x", pady=(20, 0))
-        self._btn(nav, "‹  Back", self.show_welcome).pack(side="left")
-        self._btn(nav, "Download & Install", self._do_install,
-                  primary=True).pack(side="right")
-
-    def _do_install(self):
-        self.status.config(text="Downloading from GitHub…", fg=COL_ACCENT)
-        self.update_idletasks()
-        try:
-            version = install(self.os_key.get(), self.dest)
-        except Exception as e:
-            self.status.config(
-                text=f"Couldn't install: {e}\n\nCheck your internet "
-                     "connection, or that the developer has published "
-                     "version.json on GitHub.", fg="#ff6b6b")
-            return
-        self.show_done(version)
-
-    # ---- step 3: done + launch + updates ----
-    def show_done(self, version):
-        self._clear()
-        self._title("All set!")
-        tk.Label(self.body,
-                 text=f"Visual Python {version} is installed in:\n{self.dest}",
-                 bg=COL_BG, fg="#b9c0d4", font=("Helvetica", 11),
-                 justify="left").pack(anchor="w", pady=(8, 4))
-        fname, _, _ = launcher_script(self.os_key.get(), self.dest)
-        tk.Label(self.body,
-                 text=f"Double-click  “{fname}”  in that folder to start it,\n"
-                      "or use the Launch button below.",
-                 bg=COL_BG, fg="#8a90a6", font=("Helvetica", 10),
-                 justify="left").pack(anchor="w", pady=(0, 14))
-
-        self.status2 = tk.Label(self.body, text="", bg=COL_BG, fg=COL_ACCENT,
-                                font=("Helvetica", 10), wraplength=500,
-                                justify="left")
-        self.status2.pack(anchor="w")
-
-        row = tk.Frame(self.body, bg=COL_BG)
-        row.pack(side="bottom", fill="x", pady=(20, 0))
-        self._btn(row, "Launch Visual Python", self._launch,
-                  primary=True).pack(side="left")
-        self._btn(row, "Check for updates", self._check_updates).pack(side="left",
-                                                                      padx=8)
-
-    def _launch(self):
-        app = self.dest / APP_FILENAME
-        if not app.exists():
-            messagebox.showerror("Not found", f"{app} is missing - reinstall.")
-            return
-        try:
-            subprocess.Popen([sys.executable, str(app)])
-        except Exception as e:
-            messagebox.showerror("Could not launch", str(e))
-
-    def _check_updates(self):
-        self.status2.config(text="Checking GitHub…", fg=COL_ACCENT)
-        self.update_idletasks()
-        try:
-            has_update, remote, notes = check_update(self.dest)
-        except Exception as e:
-            self.status2.config(text=f"Couldn't check: {e}", fg="#ff6b6b")
-            return
-        if not has_update:
-            self.status2.config(text="You're on the latest version. ✓",
-                                fg="#7dd77d")
-            return
-        if messagebox.askyesno("Update available",
-                               f"Version {remote} is available.\n\n{notes}\n\n"
-                               "Download it now?"):
+def _version_in_code(text):
+    for line in text.splitlines():
+        if line.strip().startswith("__version__"):
             try:
-                version = install(self.os_key.get(), self.dest)
-                self.status2.config(text=f"Updated to {version}. ✓", fg="#7dd77d")
-            except Exception as e:
-                self.status2.config(text=f"Update failed: {e}", fg="#ff6b6b")
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+            except Exception:
+                return None
+    return None
+
+
+# ===========================================================================
+# Seed + update
+# ===========================================================================
+def seed_if_missing(appdir=None, seed_src=None):
+    """On first run, copy the bundled app code into appdir."""
+    dst = local_app_path(appdir)
+    if dst.exists():
+        return False
+    src = seed_src or bundled_seed_path()
+    if not os.path.exists(src):
+        return False
+    shutil.copyfile(src, dst)
+    write_installed(_version_in_code(dst.read_text(encoding="utf-8")) or "0.0.0",
+                    appdir)
+    return True
+
+
+def fetch_bytes(url, timeout=15):
+    req = urllib.request.Request(url, headers={"User-Agent": "VisualPython-Launcher"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def get_manifest(fetch=fetch_bytes):
+    return json.loads(fetch(MANIFEST_URL).decode("utf-8"))
+
+
+def _asset_url(manifest):
+    assets = manifest.get("assets", {})
+    return assets.get(os_key()) or assets.get("all") or manifest.get("app")
+
+
+def update_if_available(appdir=None, fetch=fetch_bytes):
+    """Check GitHub and update the local app code if newer.
+
+    Returns (updated: bool, version: str, message: str). Network problems are
+    swallowed so the app still launches from the local copy when offline.
+    """
+    local = read_installed(appdir).get("version", "0.0.0")
+    try:
+        manifest = get_manifest(fetch)
+    except Exception:
+        return (False, local, "offline")
+    remote = manifest.get("version", "0.0.0")
+    if not is_newer(remote, local) and local_app_path(appdir).exists():
+        return (False, local, "up-to-date")
+    url = _asset_url(manifest)
+    if not url:
+        return (False, local, "no asset for this OS")
+    try:
+        data = fetch(url)
+    except Exception:
+        return (False, local, "download failed")
+    expected = manifest.get("sha256", {}).get(os_key())
+    if expected and hashlib.sha256(data).hexdigest().lower() != expected.lower():
+        return (False, local, "failed security check")
+    local_app_path(appdir).write_bytes(data)
+    write_installed(remote, appdir)
+    return (True, remote, manifest.get("notes", ""))
+
+
+# ===========================================================================
+# Run the app inside this interpreter (the bundled Python)
+# ===========================================================================
+def run_app(appdir=None):
+    path = local_app_path(appdir)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    code = path.read_text(encoding="utf-8")
+    g = {"__name__": "__main__", "__file__": str(path)}
+    exec(compile(code, str(path), "exec"), g)
+
+
+# ===========================================================================
+# Tiny splash so the exe doesn't look frozen while it checks for updates
+# ===========================================================================
+def _splash():
+    root = tk.Tk()
+    root.overrideredirect(True)
+    root.configure(bg="#1e1f26")
+    w, h = 360, 110
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+    tk.Label(root, text="Visual Python", bg="#1e1f26", fg="#e6e6e6",
+             font=("Helvetica", 16, "bold")).pack(pady=(24, 4))
+    msg = tk.Label(root, text="Starting…", bg="#1e1f26", fg="#4ea1ff",
+                   font=("Helvetica", 10))
+    msg.pack()
+    root.update()
+    return root, msg
+
+
+def main():
+    try:
+        seed_if_missing()
+    except Exception:
+        pass
+
+    root, msg = None, None
+    try:
+        root, msg = _splash()
+        msg.config(text="Checking for updates…")
+        root.update()
+        updated, version, note = update_if_available()
+        if updated:
+            msg.config(text=f"Updated to {version} ✓")
+            root.update()
+    except Exception:
+        pass
+    finally:
+        if root is not None:
+            root.destroy()
+
+    try:
+        run_app()
+    except Exception as e:
+        try:
+            r = tk.Tk()
+            r.withdraw()
+            messagebox.showerror(
+                "Visual Python",
+                "Couldn't start the app.\n\n"
+                "If this is the first run, connect to the internet once so it "
+                f"can download the app.\n\nDetails: {e}")
+            r.destroy()
+        except Exception:
+            print("Could not start Visual Python:", e)
 
 
 if __name__ == "__main__":
-    Wizard().mainloop()
+    main()
