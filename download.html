@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download Visual Python</title>
+<style>
+  :root { --bg:#1e1f26; --panel:#2d2f3a; --text:#e6e6e6; --muted:#8a90a6;
+          --accent:#4ea1ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         display:flex; min-height:100vh; align-items:center; justify-content:center; }
+  .card { width:min(680px,92vw); text-align:center; padding:32px; }
+  h1 { font-size:2rem; margin:0 0 6px; }
+  p.sub { color:var(--muted); margin:0 0 28px; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+  @media (max-width:560px){ .grid{ grid-template-columns:1fr; } }
+  .opt { background:var(--panel); border:2px solid transparent; border-radius:14px;
+         padding:22px 16px; text-decoration:none; color:var(--text);
+         display:flex; flex-direction:column; gap:8px; transition:.15s; }
+  .opt:hover { border-color:var(--accent); transform:translateY(-2px); }
+  .opt .os { font-size:1.15rem; font-weight:700; }
+  .opt .file { color:var(--muted); font-size:.82rem; font-family:monospace; }
+  .opt.reco { border-color:var(--accent); }
+  .badge { display:inline-block; margin-top:6px; font-size:.72rem; color:var(--accent); }
+  .note { margin-top:26px; color:var(--muted); font-size:.85rem; line-height:1.5; }
+  .glyph { font-size:1.8rem; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Visual Python</h1>
+    <p class="sub">Build Python by connecting blocks. Pick your computer:</p>
+    <div class="grid">
+      <a class="opt" id="windows"
+         href="https://github.com/ConPlusPlus/visual-python/releases/latest/download/VisualPython.exe">
+        <div class="glyph">🪟</div><div class="os">Windows</div>
+        <div class="file">VisualPython.exe</div><div class="badge"></div>
+      </a>
+      <a class="opt" id="mac"
+         href="https://github.com/ConPlusPlus/visual-python/releases/latest/download/VisualPython-mac.zip">
+        <div class="glyph">🍎</div><div class="os">Mac</div>
+        <div class="file">VisualPython-mac.zip</div><div class="badge"></div>
+      </a>
+      <a class="opt" id="chromebook"
+         href="https://github.com/ConPlusPlus/visual-python/releases/latest/download/VisualPython-linux">
+        <div class="glyph">💻</div><div class="os">Chromebook</div>
+        <div class="file">VisualPython-linux</div><div class="badge"></div>
+      </a>
+    </div>
+    <p class="note" id="note">
+      Nothing else to install — Python is bundled inside. The app keeps itself
+      up to date automatically.
+    </p>
+  </div>
+<script>
+  // Highlight the visitor's likely OS.
+  (function () {
+    var p = (navigator.userAgentData && navigator.userAgentData.platform ||
+             navigator.platform || navigator.userAgent || "").toLowerCase();
+    var ua = navigator.userAgent.toLowerCase();
+    var key = "windows";
+    if (ua.indexOf("cros") >= 0) key = "chromebook";          // ChromeOS
+    else if (p.indexOf("mac") >= 0) key = "mac";
+    else if (p.indexOf("win") >= 0) key = "windows";
+    else if (p.indexOf("linux") >= 0) key = "chromebook";
+    var el = document.getElementById(key);
+    if (el) {
+      el.classList.add("reco");
+      el.querySelector(".badge").textContent = "Recommended for you";
+    }
+    var tips = {
+      windows: "Windows: double-click the .exe to run.",
+      mac: "Mac: unzip, then right-click the app and choose Open the first time.",
+      chromebook: "Chromebook: needs Linux turned on. Make it executable " +
+                  "(chmod +x VisualPython-linux), then run it."
+    };
+    document.getElementById("note").textContent = tips[key] + " " +
+      "Nothing else to install — Python is bundled inside, and the app keeps " +
+      "itself up to date automatically.";
+  })();
+</script>
+</body>
+</html>

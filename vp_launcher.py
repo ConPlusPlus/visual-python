@@ -36,6 +36,7 @@ import shutil
 import hashlib
 import platform
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 import tkinter as tk
@@ -58,6 +59,9 @@ GITHUB_BRANCH = "main"
 MANIFEST_URL = (f"https://raw.githubusercontent.com/{GITHUB_USER}/"
                 f"{GITHUB_REPO}/{GITHUB_BRANCH}/version.json")
 APP_FILENAME = "visual_python.py"
+# Version of THIS native launcher/exe. Bump it (and version.json's
+# "launcher_version") only when you rebuild and publish new executables.
+LAUNCHER_VERSION = "1.0.0"
 
 
 # ===========================================================================
@@ -200,6 +204,42 @@ def update_if_available(appdir=None, fetch=fetch_bytes):
 
 
 # ===========================================================================
+# Native-installer (exe/app/binary) update notice, per OS
+# ===========================================================================
+def launcher_update_for(manifest):
+    """If the manifest advertises a newer native installer for this OS, return
+    (version, download_url); otherwise (None, None)."""
+    remote = manifest.get("launcher_version")
+    if remote and is_newer(remote, LAUNCHER_VERSION):
+        return remote, manifest.get("launchers", {}).get(os_key())
+    return None, None
+
+
+def check_launcher_update(fetch=fetch_bytes):
+    """Tell the user (and open the download page) if a newer installer exists
+    for their OS. The app code itself updates silently, so this is rare."""
+    try:
+        manifest = get_manifest(fetch)
+    except Exception:
+        return
+    version, url = launcher_update_for(manifest)
+    if not version or not url:
+        return
+    r = tk.Tk()
+    r.withdraw()
+    try:
+        if messagebox.askyesno(
+                "New installer available",
+                f"A newer Visual Python installer ({version}) is available "
+                "for your computer.\n\nThe app itself already updates "
+                "automatically — you only need this occasionally.\n\n"
+                "Open the download page now?"):
+            webbrowser.open(url)
+    finally:
+        r.destroy()
+
+
+# ===========================================================================
 # Run the app inside this interpreter (the bundled Python)
 # ===========================================================================
 def run_app(appdir=None):
@@ -250,6 +290,11 @@ def main():
     finally:
         if root is not None:
             root.destroy()
+
+    try:
+        check_launcher_update()
+    except Exception:
+        pass
 
     try:
         run_app()

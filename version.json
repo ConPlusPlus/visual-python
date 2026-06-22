@@ -5,5 +5,11 @@
     "windows": "https://raw.githubusercontent.com/ConPlusPlus/visual-python/main/visual_python.py",
     "mac": "https://raw.githubusercontent.com/ConPlusPlus/visual-python/main/visual_python.py",
     "chromebook": "https://raw.githubusercontent.com/ConPlusPlus/visual-python/main/visual_python.py"
+  },
+  "launcher_version": "1.0.0",
+  "launchers": {
+    "windows": "https://github.com/ConPlusPlus/visual-python/releases/latest/download/VisualPython.exe",
+    "mac": "https://github.com/ConPlusPlus/visual-python/releases/latest/download/VisualPython-mac.zip",
+    "chromebook": "https://github.com/ConPlusPlus/visual-python/releases/latest/download/VisualPython-linux"
   }
 }
